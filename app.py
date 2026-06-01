@@ -144,16 +144,7 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="card">
-    <h3>📌 Instrucciones</h3>
-    <p>
-    Para comenzar, sube un archivo Excel/CSV o ingresa los datos manualmente.
-    Luego podrás editar la tabla, seleccionar una columna, generar el histograma,
-    ajustar distribuciones y crear nuevos datos aleatorios.
-    </p>
-</div>
-""", unsafe_allow_html=True)
+
 
 
 # =====================================================
@@ -182,7 +173,8 @@ def limpiar_datos(serie):
     for nombre, dist in distribuciones.items():
         try:
             parametros = dist.fit(datos)
-            ks_stat, p_valor = stats.kstest(datos, dist.name, args=parametros)
+            datos_norm = (datos - min(datos)) / (max(datos) - min(datos))
+            ks_stat, p_valor = stats.kstest(datos_norm, dist.cdf, args=parametros)
 
             resultados.append({
                 "Distribución": nombre,
@@ -246,7 +238,16 @@ def ajustar_distribuciones(datos, criterio="KS", tipo="Básicas"):
         try:
             parametros = dist.fit(datos)
 
-            ks_stat, p_valor = stats.kstest(datos, dist.cdf, args=parametros)
+            try:
+                # Filtros de coherencia por rango de datos
+                if nombre == "Beta" and datos.min() < 0:
+                    continue  # No ajustar Beta si datos fuera de [0,)
+                if nombre in ["Gamma", "Erlang", "F", "Pareto", "Inversa Gaussiana"] and any(datos <= 0):
+                    continue  # No ajustar distribuciones solo positivas si hay datos negativos
+                cdf_func = lambda x: dist.cdf(x, *parametros)
+                ks_stat, p_valor = stats.kstest(datos, cdf_func)
+            except Exception:
+                continue
 
             log_likelihood = np.sum(dist.logpdf(datos, *parametros))
 
@@ -346,6 +347,18 @@ def convertir_excel(df):
 
     return output.getvalue()
 
+def validar_parametros(nombre_dist, parametros):
+    # Ejemplo para algunas distribuciones
+    if nombre_dist in ["Beta", "Gamma", "Weibull", "Pareto", "Erlang", "Inversa Gaussiana"]:
+        if any(p < 0 for p in parametros):
+            st.error(f"Todos los parámetros de {nombre_dist} deben ser mayores que 0.")
+            return False
+    if nombre_dist == "F":
+        # df1 y df2 deben ser > 0
+        if parametros[0] <= 0 or parametros[1] <= 0:
+            st.error("Los grados de libertad (df1 y df2) de la distribución F deben ser mayores que 0")
+            return False
+    return True
 
 # =====================================================
 # MENÚ LATERAL
@@ -355,7 +368,7 @@ st.sidebar.title("⚙️ Menú de trabajo")
 
 modo = st.sidebar.radio(
     "Selecciona el modo de ingreso:",
-    ["Subir archivo Excel/CSV", "Ingresar datos manualmente"]
+    ["Subir archivo Excel/CSV", "Ingresar datos manualmente","Generador de datos aleatorios"]
 )
 
 st.sidebar.markdown("---")
@@ -370,10 +383,22 @@ df_editado = None
 datos = None
 
 st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown('<p class="subtitulo">1. Carga y edición de datos</p>', unsafe_allow_html=True)
 
 if modo == "Subir archivo Excel/CSV":
+    st.markdown("""
+    <div class="card">
+        <h3>📌 Instrucciones</h3>
+        <p>
+        Para comenzar, sube un archivo Excel/CSV o ingresa los datos manualmente.
+        Luego podrás editar la tabla, seleccionar una columna, generar el histograma,
+        ajustar distribuciones y crear nuevos datos aleatorios.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<div class="card">', unsafe_allow_html=True)
 
+    st.markdown('<p class="subtitulo">1. Carga y edición de datos</p>', unsafe_allow_html=True)
     archivo = st.file_uploader(
         "Sube tu archivo Excel o CSV",
         type=["xlsx", "csv"]
@@ -419,8 +444,178 @@ if modo == "Subir archivo Excel/CSV":
         )
 
         datos = limpiar_datos(df_editado[columna])
+        
+elif modo=="Generador de datos aleatorios":
+    st.markdown('<p class="subtitulo">Generador de datos aleatorios</p>', unsafe_allow_html=True)
+
+    distribuciones = list(obtener_distribuciones("Todas").keys())
+    dist_generar = st.selectbox("Selecciona la distribución:", distribuciones)
+
+    # Crear inputs dinámicos según la distribución
+    parametros = []
+    if dist_generar == "Normal":
+        media = st.number_input("Media (mu):", value=0.0)
+        desviacion = st.number_input("Desviación estándar (sigma):", value=1.0)
+        parametros = [media, desviacion]
+
+    elif dist_generar == "Exponencial":
+        scale = st.number_input("Escala (1/lambda):", value=1.0)
+        parametros = [scale]
+
+    elif dist_generar == "Uniforme":
+        a = st.number_input("Límite inferior (a):", value=0.0)
+        b = st.number_input("Límite superior (b):", value=1.0)
+        parametros = [a, b]
+
+    elif dist_generar == "Beta":
+        alfa = st.number_input("Alfa:", value=2.0)
+        beta = st.number_input("Beta:", value=2.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [alfa, beta, loc, scale]
+
+    elif dist_generar == "Gamma":
+        shape = st.number_input("Shape (k):", value=2.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [shape, loc, scale]
+
+    elif dist_generar == "Weibull":
+        c = st.number_input("C (shape):", value=1.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [c, loc, scale]
+
+    elif dist_generar == "Triangular":
+        c = st.number_input("Modo (c):", value=0.5)
+        loc = st.number_input("Límite inferior (a):", value=0.0)
+        scale = st.number_input("Límite superior (b):", value=1.0)
+        parametros = [c, loc, scale]
+
+    elif dist_generar == "Lognormal":
+        s = st.number_input("Sigma:", value=1.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale:", value=1.0)
+        parametros = [s, loc, scale]
+
+    elif dist_generar == "Student t":
+        df = st.number_input("Grados de libertad (df):", value=10.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [df, loc, scale]
+
+    elif dist_generar == "F":
+        dfn = st.number_input("dfn (grados de libertad numerador):", value=1.0)
+        dfd = st.number_input("dfd (grados de libertad denominador):", value=1.0)
+        parametros = [dfn, dfd]
+
+    elif dist_generar == "Chi-cuadrado":
+        df = st.number_input("Grados de libertad (df):", value=2.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [df, loc, scale]
+
+    elif dist_generar == "Laplace":
+        loc = st.number_input("Loc (mediana):", value=0.0)
+        scale = st.number_input("Scale:", value=1.0)
+        parametros = [loc, scale]
+
+    elif dist_generar == "Cauchy":
+        x0 = st.number_input("X0 (mediana):", value=0.0)
+        gamma = st.number_input("Gamma (scale):", value=1.0)
+        parametros = [x0, gamma]
+
+    elif dist_generar == "Gumbel derecha":
+        loc = st.number_input("Loc:", value=0.0)
+        scale = st.number_input("Scale:", value=1.0)
+        parametros = [loc, scale]
+
+    elif dist_generar == "Gumbel izquierda":
+        loc = st.number_input("Loc:", value=0.0)
+        scale = st.number_input("Scale:", value=1.0)
+        parametros = [loc, scale]
+
+    elif dist_generar == "Pareto":
+        b = st.number_input("Shape (b):", value=1.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [b, loc, scale]
+
+    elif dist_generar == "Rayleigh":
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale:", value=1.0)
+        parametros = [loc, scale]
+
+    elif dist_generar == "Erlang":
+        a = st.number_input("Shape (a):", value=1.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [a, loc, scale]
+
+    elif dist_generar == "Inversa Gaussiana":
+        mu = st.number_input("Mu:", value=1.0)
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale (opcional):", value=1.0)
+        parametros = [mu, loc, scale]
+
+    elif dist_generar == "Maxwell":
+        loc = st.number_input("Loc (opcional):", value=0.0)
+        scale = st.number_input("Scale:", value=1.0)
+        parametros = [loc, scale]
+
+    elif dist_generar == "F":
+        dfn = st.number_input("dfn:", value=1.0)
+        dfd = st.number_input("dfd:", value=1.0)
+        parametros = [dfn, dfd]
+
+    col_a, col_b = st.columns(2)
+    cantidad = col_a.number_input("Cantidad de datos a generar:", min_value=1, max_value=100000, value=1000)
+    usar_semilla = col_b.checkbox("Usar semilla aleatoria")
+    semilla = None
+    if usar_semilla:
+        semilla = col_b.number_input("Semilla:", min_value=0, max_value=999999, value=123)
+
+    if st.button("🎲 Generar datos"):
+        if validar_parametros(dist_generar, parametros):
+            datos_generados = generar_datos(dist_generar, parametros, cantidad, semilla)
+            datos_generados = generar_datos(dist_generar, parametros, cantidad, semilla)
+            df_generados = pd.DataFrame({"Datos generados": datos_generados})
+
+            st.write("Vista previa de los datos generados:")
+            st.dataframe(df_generados.head(20), use_container_width=True)
+            st.pyplot(graficar_histograma(datos_generados, f"Histograma: {dist_generar}"))
+
+            # Descarga
+            csv = df_generados.to_csv(index=False).encode("utf-8")
+            excel = convertir_excel(df_generados)
+            txt = df_generados.to_csv(index=False, header=False, sep="\t").encode("utf-8")
+
+            col1, col2, col3 = st.columns(3)
+            col1.download_button("📥 CSV", csv, "datos_generados.csv", "text/csv")
+            col2.download_button("📥 Excel", excel, "datos_generados.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            col3.download_button("📥 TXT", txt, "datos_generados.txt", "text/plain")
+
+            # Copiar datos
+            st.text_area("Datos generados para copiar:", value=df_generados.to_csv(index=False, header=False, sep="\t"), height=250)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 else:
+
+    st.markdown("""
+    <div class="card">
+        <h3>📌 Instrucciones</h3>
+        <p>
+        Para comenzar, sube un archivo Excel/CSV o ingresa los datos manualmente.
+        Luego podrás editar la tabla, seleccionar una columna, generar el histograma,
+        ajustar distribuciones y crear nuevos datos aleatorios.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown('<p class="subtitulo">1. Carga y edición de datos</p>', unsafe_allow_html=True)
     st.write("Pega aquí los datos copiados desde Excel o escríbelos manualmente.")
 
     texto = st.text_area(
@@ -508,10 +703,21 @@ if datos is not None and len(datos) > 0:
 
     st.write("")
 
-    criterio_ajuste = st.selectbox(
-    "Selecciona el criterio de evaluación:",
-    ["KS", "AIC", "BIC"]
+    # Mapeo de criterios en español
+    criterios_map = {
+        "Kolmogorov-Smirnov (KS)": "KS",
+        "Criterio de Información de Akaike (AIC)": "AIC",
+        "Criterio de Información Bayesiano (BIC)": "BIC"
+    }
+
+    # Selectbox con nombres en español
+    criterio_nombre = st.selectbox(
+        "Selecciona el criterio de evaluación:",
+        list(criterios_map.keys())
     )
+
+    # Convertir a la abreviatura interna para ordenar la tabla
+    criterio_ajuste = criterios_map[criterio_nombre]
 
     tipo_distribuciones = st.selectbox(
         "Grupo de distribuciones a probar:",
@@ -689,15 +895,3 @@ if datos is not None and len(datos) > 0:
             )
 
         st.markdown('</div>', unsafe_allow_html=True)
-
-else:
-    st.markdown("""
-    <div class="card">
-        <h3>📌 Instrucciones</h3>
-        <p>
-        Para comenzar, sube un archivo Excel/CSV o ingresa los datos manualmente.
-        Luego podrás editar la tabla, seleccionar una columna, generar el histograma,
-        ajustar distribuciones y crear nuevos datos aleatorios.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
